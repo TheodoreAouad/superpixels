@@ -95,7 +95,7 @@ class SLIC:
 
 
     def infer_superpixel_img(self):
-        mask = self.pixel_labels + 0
+        mask = self.pixel_labels + 0.
         for label in range(len(self.centers)):
             mask[mask == label] = self.centers[label][0]
         return mask
@@ -123,9 +123,9 @@ class SLIC:
         return error
 
     def compute_distance(self, p1, p2):
-        dc2 = (p1[0] - p2[0])**2
+        dc = (p1[0] - p2[0])
         ds = np.linalg.norm(p1[1:] - p2[1:])
-        return np.sqrt(dc2 + (ds * self.m / self.S) ** 2)
+        return np.sqrt((dc / self.m) ** 2 + (ds / self.S) ** 2)
 
     @property
     def S(self):

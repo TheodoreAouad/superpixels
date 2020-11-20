@@ -25,6 +25,14 @@ class Hiersup:
         self.nb_pop = 0
         self.merged_away = []
 
+        # debugging
+        self.nb_neighbors = []
+        self.time_update = []
+        self.time_merge = []
+        self.time_step = []
+        self.time_weights = []
+        self.time_tot = []
+
     @staticmethod
     def compute_weights(superpixels: SuperpixelImage, distance) -> List[Tuple[Tuple[int], float]]:
         img = superpixels.array_means
@@ -149,11 +157,18 @@ class Hiersup:
         keep = True
         it = 0
         t1 = 0
+        t2 = 0
+        tot = 0
         while keep:
-            print(time() - t1)
+            print("Step time:", t2 - t1, '\n',
+            "Total loop time:", tot, '\n')
+
             t1 = time()
             self.step()
 
+            t2 = time()
+            tot += (t2 - t1)
+            self.time_tot.append(tot)
             it += 1
             keep = (
                 ((not self.max_it) or (it < self.max_it)) &
@@ -166,6 +181,7 @@ class Hiersup:
         return self
 
     def step(self):
+        t0 = time()
         keep = True
         while keep and len(self.weights) > 0:
             (label1, label2), dist = self.weights.pop(0)
@@ -174,7 +190,7 @@ class Hiersup:
 
         self.merged_away.append(label1)
         self.merged_away.append(label2)
-# 65289
+
         t1 = time()
         self.max_label += 1
         self.superpixels.merge(label1, label2, label_out=self.max_label)
@@ -194,6 +210,15 @@ class Hiersup:
         self.update_weights(self.max_label)
         t3 = time()
 
-        print('Time merge:', t2 - t1)
-        # print('Time update:', t3 - t2)
-        # print()
+        nb_neighbors = len(self.neighbors[self.max_label])
+        self.nb_neighbors.append(nb_neighbors)
+        self.time_update.append(t3-t2)
+        self.time_merge.append(t2-t1)
+        self.time_weights.append(t1-t0)
+        self.time_step.append(t3-t0)
+
+        print('Nb neighbors', nb_neighbors, '\n',
+        'Time to find weight:', t1 - t0, '\n',
+        'Time merge:', t2 - t1, '\n',
+        'Time update:', t3 - t2, '\n',)
+        # print('Total time step ?', t3 - t0)

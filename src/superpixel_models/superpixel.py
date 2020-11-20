@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import List, Optional
+from typing import List, Optional, Dict
+from time import time
 
 from scipy.ndimage import convolve
 import numpy as np
@@ -16,12 +17,16 @@ class Superpixel:
         self.label = label
         self.pixel_idxs = pixel_idxs
         self.values = values
+        self.value = np.mean(self.values)
 
-    def value(self):
-        return np.mean(self.values)
+    # def value(self):
+    #     return np.mean(self.values)
 
     def __getitem__(self, idx):
         return self.pixel_idxs[idx], self.values[idx]
+
+    def __len__(self):
+        return len(self.pixel_idxs)
 
     def merge(self, sp: Superpixel, label: Optional[int] = None) -> Superpixel:
         return Superpixel(
@@ -45,7 +50,7 @@ class SuperpixelImage:
     def __init__(
         self,
         img: np.ndarray,
-        superpixels: Optional[List[Superpixel]] = None,
+        superpixels: Optional[Dict[Superpixel]] = None,
         mask: Optional[np.ndarray] = None,
     ):
         self.img_ini = img + 0
@@ -57,8 +62,11 @@ class SuperpixelImage:
         else:
             self.superpixels = self.init_sp_from_img(img)
 
-        self.array_label = self.compute_array_label()
-        self.array_means = self.compute_array_means()
+        self.superpixels_values = list(self.superpixels.values())
+
+        # self.superpixels_dict = self.generate_superpixel_dict(self.superpixels)
+        # self.array_label = self.compute_array_label()
+        # self.array_means = self.compute_array_means()
 
     def __getitem__(self, idx):
         return self.superpixels[idx]
@@ -66,39 +74,53 @@ class SuperpixelImage:
     def __len__(self):
         return len(self.superpixels)
 
-    def compute_array_label(self) -> np.ndarray:
-        img = np.zeros(self.img_ini.shape)
+    # deprecated
+    # def get_by_label(self, label: int) -> Superpixel:
+    #     for sp in self.superpixels.values():
+    #         if sp.label == label:
+    #             return sp
 
-        for sp in self.superpixels:
+    @property  # We make this a property. The arrays will update with self.superpixels
+    def array_label(self) -> np.ndarray:
+        img = np.zeros(self.img_ini.shape).astype(int)
+
+        for sp in self.superpixels.values():
             for (idx1, idx2), _ in sp:
                 img[idx1, idx2] = sp.label
-
         return img
 
-    def compute_array_means(self) -> np.ndarray:
+    @property  # We make this a property. The arrays will update with self.superpixels
+    def array_means(self) -> np.ndarray:
         img = np.zeros(self.img_ini.shape)
 
-        for sp in self.superpixels:
-            value = sp.value()
+        for sp in self.superpixels.values():
+            value = sp.value
             for (idx1, idx2), pixel_id in sp:
                 img[idx1, idx2] = value
-
         return img
+
+
+    # @staticmethod
+    # def generate_superpixel_dict(superpixels: List[Superpixel]):
+    #     res = {}
+    #     for sp in superpixels:
+    #         res[sp.label] = sp
+    #     return res
 
 
     @staticmethod
     def init_sp_from_img(img: np.ndarray) -> List[Superpixel]:
         W, L = img.shape
-        superpixels = []
+        superpixels = {}
 
         idx = 0
         for i in range(W):
             for j in range(L):
-                superpixels.append(Superpixel(
+                superpixels[idx] = Superpixel(
                     label=idx,
                     pixel_idxs=[[i, j]],
                     values=[img[i, j]],
-                ))
+                )
                 idx += 1
 
         return superpixels
@@ -106,19 +128,18 @@ class SuperpixelImage:
     @staticmethod
     def init_sp_from_mask(img: np.ndarray, mask: np.ndarray) -> List[Superpixel]:
         W, L = mask.shape
-        superpixels = []
+        superpixels = {}
 
         idx = 0
         for value in np.unique(mask):
-            superpixels.append(Superpixel(
+            superpixels[idx] = Superpixel(
                 label=idx,
                 pixel_idxs=list(zip(*np.where(mask==value))),
                 values=list(img[np.where(mask==value)])
-            ))
+            )
             idx += 1
 
         return superpixels
-
 
     def infer_superpixel_edges(self) -> np.ndarray:
         mask = self.array_label
@@ -135,9 +156,32 @@ class SuperpixelImage:
 
     def __repr__(self):
         # res = "SuperpixelImage([\n"
-        # for sp in self.superpixels:
+        # for sp in self.superpixels.values():
         #     toadd = "   " + sp.__repr__().replace('\n', '\n   ')
         #     res += toadd + ",\n"
         # res += "])"
         # return res
         return super().__repr__().replace('>', f' ({len(self)} superpixels)>')
+
+
+    def merge(self, label1: int, label2: int, label_out: Optional[int] = None):
+
+        # sps = []
+        t1 = time()
+        # for idx, sp in enumerate(self.superpixels):
+        #     if sp.label in [label1, label2]:
+        #         sps.append((idx, sp))
+        #         if len(sps) == 2:
+        #             break
+
+        # (idx1, sp1), (idx2, sp2) = sps
+        # self.superpixels[idx1] = sp1.merge(sp2, label=label_out)
+        # self.superpixels.pop(idx2)
+        sp1 = self.superpixels.pop(label1)
+        sp2 = self.superpixels.pop(label2)
+        t2 = time()
+        self.superpixels[label_out] = sp1.merge(sp2, label=label_out)
+        t3 = time()
+
+        # print("MERGE: Getting superpixel index:", t2 - t1)
+        # print("MERGE: Merging superpixels:", t3 - t2)

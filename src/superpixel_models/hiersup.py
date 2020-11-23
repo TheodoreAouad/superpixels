@@ -1,11 +1,24 @@
 from typing import Optional, List, Tuple, Dict
-import bisect
+from functools import total_ordering
 from time import time
-
+import heapq
 
 import numpy as np
 
 from src.superpixel_models.superpixel import SuperpixelImage
+
+
+@total_ordering
+class WeightItem(tuple):
+
+    def __eq__(self, other):
+        return self[0] == other[0]
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def __lt__(self, other):
+        return self[0] < other[0]
 
 
 class Hiersup:
@@ -17,13 +30,12 @@ class Hiersup:
         self.W_ = None
         self.L_ = None
         self.weights = None
-        self.weights_values = None
         self.superpixels = None
         self.neighbors = None
         self.max_label = None
 
         self.nb_pop = 0
-        self.merged_away = []
+        self.merged_away = set()
 
         # debugging
         self.nb_neighbors = []
@@ -32,6 +44,7 @@ class Hiersup:
         self.time_step = []
         self.time_weights = []
         self.time_tot = []
+        self.nb_weights_pop = []
 
     @staticmethod
     def compute_weights(superpixels: SuperpixelImage, distance) -> List[Tuple[Tuple[int], float]]:
@@ -39,7 +52,6 @@ class Hiersup:
         labels = superpixels.array_label
         W, L = img.shape
         weights = []
-        weights_values = []
         max_label = 0
 
         for idx1 in range(W - 1):
@@ -48,30 +60,27 @@ class Hiersup:
                 lb1, lb2, lb3 = labels[idx1, idx2], labels[idx1 + 1, idx2], labels[idx1, idx2 + 1]
 
                 dist1 = distance(sp1, sp2)
-                weights.append(
-                    ((lb1, lb2), dist1)
-                )
-                weights_values.append(dist1)
+                weights.append(WeightItem(
+                    (dist1, (lb1, lb2))
+                ))
 
                 dist2 = distance(sp1, sp3)
-                weights.append(
-                    ((lb1, lb3), dist2)
-                )
-                weights_values.append(dist2)
+                weights.append(WeightItem(
+                    (dist2, (lb1, lb3))
+                ))
 
                 max_label = max([max_label, lb1, lb2, lb3])
 
+        # Add last pixel that was not included above.
         sp1, sp2 = img[-1, -2], img[-1, -1]
         lb1, lb2 = labels[-1, -2], labels[-1, -1]
         dist = distance(sp1, sp2)
-        weights.append(((lb1, lb2), dist))
-        weights_values.append(dist)
+        weights.append(WeightItem((dist, (lb1, lb2))))
         max_label = max([max_label, lb1, lb2])
 
-        weights.sort(key=lambda x: x[1])
-        weights_values.sort()
+        heapq.heapify(weights)
 
-        return weights, weights_values, max_label
+        return weights, max_label
 
     @staticmethod
     def compute_neighbors(superpixels) -> Dict:
@@ -122,10 +131,7 @@ class Hiersup:
             )
 
             t1 = time()
-            insert_idx = bisect.bisect(self.weights_values, value)
-            t2 = time()
-            self.weights.insert(insert_idx, ((lb1, lb2), value))
-            self.weights_values.insert(insert_idx, value)
+            heapq.heappush(self.weights, WeightItem((value, (lb1, lb2))))
             t3 = time()
 
             # print("UPDATE: Computing distance:", t1 - t0)
@@ -141,7 +147,7 @@ class Hiersup:
         return (c1 - c2) ** 2
 
     def init_graph(self):
-        self.weights, self.weights_values, self.max_label = self.compute_weights(self.superpixels, self.distance)
+        self.weights, self.max_label = self.compute_weights(self.superpixels, self.distance)
         self.neighbors = self.compute_neighbors(self.superpixels)
 
     def fit(
@@ -183,13 +189,15 @@ class Hiersup:
     def step(self):
         t0 = time()
         keep = True
-        while keep and len(self.weights) > 0:
-            (label1, label2), dist = self.weights.pop(0)
-            self.weights_values.pop(0)
-            keep = (label1 in self.merged_away) or (label2 in self.merged_away)
 
-        self.merged_away.append(label1)
-        self.merged_away.append(label2)
+        nb_weights_pop = 0  # for debugging purpose
+        while keep and len(self.weights) > 0:
+            dist, (label1, label2) = heapq.heappop(self.weights)
+            keep = (label1 in self.merged_away) or (label2 in self.merged_away)
+            nb_weights_pop += 1
+
+        self.merged_away.add(label1)
+        self.merged_away.add(label2)
 
         t1 = time()
         self.max_label += 1
@@ -216,6 +224,7 @@ class Hiersup:
         self.time_merge.append(t2-t1)
         self.time_weights.append(t1-t0)
         self.time_step.append(t3-t0)
+        self.nb_weights_pop.append(nb_weights_pop)
 
         print('Nb neighbors', nb_neighbors, '\n',
         'Time to find weight:', t1 - t0, '\n',

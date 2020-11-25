@@ -1,9 +1,34 @@
 from __future__ import annotations
-from typing import List, Optional, Dict
-from time import time
+import functools
+from typing import List, Optional, Dict, Set
 
-from scipy.ndimage import convolve
 import numpy as np
+
+from src.superpixel_models.utils import compute_edges
+
+
+def record_superpixels_state(attribute):
+    """ Decorator that records superpixels state. Recompute the function
+    if and only if superpixels did change.
+    """
+
+    def decorator_record(fn):
+        # fn_name = fn.__name__
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if args[0].superpixels_state != wrapper.superpixels_state:
+                wrapper.superpixels_state = args[0].superpixels_state
+                res = fn(*args, **kwargs)
+                setattr(args[0], attribute, res)
+                return res
+            else:
+                return getattr(args[0], attribute)
+
+        wrapper.superpixels_state = 0
+
+        return wrapper
+    return decorator_record
 
 
 class Superpixel:
@@ -18,6 +43,7 @@ class Superpixel:
         self.pixel_idxs = pixel_idxs
         self.values = values
         self.value = np.mean(self.values)
+        self.items = set(zip(pixel_idxs, values))
 
     # def value(self):
     #     return np.mean(self.values)
@@ -54,6 +80,7 @@ class SuperpixelImage:
         mask: Optional[np.ndarray] = None,
     ):
         self.img_ini = img + 0
+        self.superpixels_state = 0
 
         if superpixels is not None:
             self.superpixels = superpixels
@@ -64,9 +91,9 @@ class SuperpixelImage:
 
         self.superpixels_values = list(self.superpixels.values())
 
-        # self.superpixels_dict = self.generate_superpixel_dict(self.superpixels)
-        # self.array_label = self.compute_array_label()
-        # self.array_means = self.compute_array_means()
+        self._array_label = None
+        self._array_means = None
+        self._neighbors = None
 
     def __getitem__(self, idx):
         return self.superpixels[idx]
@@ -74,13 +101,8 @@ class SuperpixelImage:
     def __len__(self):
         return len(self.superpixels)
 
-    # deprecated
-    # def get_by_label(self, label: int) -> Superpixel:
-    #     for sp in self.superpixels.values():
-    #         if sp.label == label:
-    #             return sp
-
-    @property  # We make this a property. The arrays will update with self.superpixels
+    @property
+    @record_superpixels_state("_array_label")
     def array_label(self) -> np.ndarray:
         img = np.zeros(self.img_ini.shape).astype(int)
 
@@ -89,7 +111,8 @@ class SuperpixelImage:
                 img[idx1, idx2] = sp.label
         return img
 
-    @property  # We make this a property. The arrays will update with self.superpixels
+    @property
+    @record_superpixels_state("_array_means")
     def array_means(self) -> np.ndarray:
         img = np.zeros(self.img_ini.shape)
 
@@ -98,15 +121,6 @@ class SuperpixelImage:
             for (idx1, idx2), pixel_id in sp:
                 img[idx1, idx2] = value
         return img
-
-
-    # @staticmethod
-    # def generate_superpixel_dict(superpixels: List[Superpixel]):
-    #     res = {}
-    #     for sp in superpixels:
-    #         res[sp.label] = sp
-    #     return res
-
 
     @staticmethod
     def init_sp_from_img(img: np.ndarray) -> List[Superpixel]:
@@ -118,7 +132,7 @@ class SuperpixelImage:
             for j in range(L):
                 superpixels[idx] = Superpixel(
                     label=idx,
-                    pixel_idxs=[[i, j]],
+                    pixel_idxs=[(i, j)],
                     values=[img[i, j]],
                 )
                 idx += 1
@@ -141,47 +155,122 @@ class SuperpixelImage:
 
         return superpixels
 
+    @record_superpixels_state("_edges")
     def infer_superpixel_edges(self) -> np.ndarray:
-        mask = self.array_label
-
-        ker1 = np.array([[0, 1, -1]])
-        ker2 = np.array([[0], [1], [-1]])
-
-        edge1 = convolve(mask, ker1) != 0
-        edge2 = convolve(mask, ker2) != 0
-
-        edge1[edge2] = 1
-
-        return edge1
+        return compute_edges(self.array_label)
 
     def __repr__(self):
-        # res = "SuperpixelImage([\n"
-        # for sp in self.superpixels.values():
-        #     toadd = "   " + sp.__repr__().replace('\n', '\n   ')
-        #     res += toadd + ",\n"
-        # res += "])"
-        # return res
         return super().__repr__().replace('>', f' ({len(self)} superpixels)>')
 
 
-    def merge(self, label1: int, label2: int, label_out: Optional[int] = None):
+    def merge(self, label1: int, label2: int, label_out: Optional[int] = None, track_neighbors=True):
 
-        # sps = []
-        t1 = time()
-        # for idx, sp in enumerate(self.superpixels):
-        #     if sp.label in [label1, label2]:
-        #         sps.append((idx, sp))
-        #         if len(sps) == 2:
-        #             break
+        if label2 not in self.get_neighbors_of(label1):
+            assert False, "{label2} not in {label1} neighbors"
 
-        # (idx1, sp1), (idx2, sp2) = sps
-        # self.superpixels[idx1] = sp1.merge(sp2, label=label_out)
-        # self.superpixels.pop(idx2)
+        if label_out is None:
+            label_out = label1
+
         sp1 = self.superpixels.pop(label1)
         sp2 = self.superpixels.pop(label2)
-        t2 = time()
-        self.superpixels[label_out] = sp1.merge(sp2, label=label_out)
-        t3 = time()
+        self.set_superpixel(label_out, sp1.merge(sp2, label=label_out))
 
-        # print("MERGE: Getting superpixel index:", t2 - t1)
-        # print("MERGE: Merging superpixels:", t3 - t2)
+
+        if track_neighbors:
+            self.set_neighbors_of(label_out,
+                self.get_neighbors_of(label1)
+                .union(self.get_neighbors_of(label2))
+                .difference([label1, label2])
+            )
+
+            to_go = set([label1, label2]).difference([label_out])
+
+            for lb in [label1, label2]:
+                for nei in self.get_neighbors_of(lb).difference(to_go):
+                    self.set_neighbors_of(
+                        nei,
+                        self.get_neighbors_of(nei).union([label_out]).difference(to_go)
+                    )
+
+            for lb in to_go:
+                self.remove_from_neighbors(lb)
+
+
+
+    @record_superpixels_state("_neighbors")
+    def compute_neighbors(self):
+        edges = self.infer_superpixel_edges()
+        labels = self.array_label
+        _neighbors = {}
+
+        xs, ys = np.where(edges)
+        for (x, y) in zip(xs, ys):
+            lb1 = labels[x, y]
+            lb2 = labels[max(0, x - 1), y]
+            lb3 = labels[x, max(0, y - 1)]
+
+            if lb1 != lb2:
+                _neighbors.setdefault(lb1, set()).add(lb2)
+                _neighbors.setdefault(lb2, set()).add(lb1)
+            if lb1 != lb3:
+                _neighbors.setdefault(lb1, set()).add(lb3)
+                _neighbors.setdefault(lb3, set()).add(lb1)
+
+        return _neighbors
+
+
+    def get_neighbors_of(self, label: int) -> List[int]:
+        return self._neighbors[label]
+
+    def set_neighbors_of(self, label: int, neis: Set[int]) -> Dict:
+        self._neighbors[label] = neis
+        return self._neighbors
+
+    def remove_from_neighbors(self, label: int) -> Dict:
+        del(self._neighbors[label])
+        return self._neighbors
+
+    def update_neighbors(self, labels: List[int]) -> Dict:
+        array_label = self.array_label
+        for lb in labels:
+            new_neis = set()
+            if lb not in self.superpixels.keys():
+                del(self._neighbors[lb])
+                continue
+
+            all_edges = self.infer_superpixel_edges()
+            cur_edges = compute_edges(array_label == lb)
+
+            xs, ys = np.where(all_edges * cur_edges)
+            for (x, y) in zip(xs, ys):
+
+                lb2 = array_label[max(0, x - 1), y]
+                lb3 = array_label[x, max(0, y - 1)]
+
+                if lb2 != lb:
+                    new_neis.add(lb2)
+                    self._neighbors.setdefault(lb2, set()).add(lb)
+                if lb3 != lb:
+                    new_neis.add(lb3)
+                    self._neighbors.setdefault(lb3, set()).add(lb)
+
+            self.set_neighbors_of(lb, new_neis)
+
+        return self._neighbors
+
+
+
+    def array_some_sp(self, labels: List[int]):
+        array_label = self.array_label
+        array_label[~np.isin(array_label, labels)] = -1
+        return array_label
+
+
+    def set_superpixel(self, label: int, new_sp: Superpixel) -> None:
+        self.superpixels[label] = new_sp
+        self.superpixels_state += 1
+
+    def __setattr__(self, name, value):
+        if name == "superpixels":
+            self.superpixels_state += 1
+        return super().__setattr__(name, value)

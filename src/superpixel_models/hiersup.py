@@ -4,7 +4,7 @@ from time import time
 import heapq
 
 import numpy as np
-from blist import sortedlist
+# from blist import sortedlist
 
 from src.superpixel_models.superpixel import SuperpixelImage
 
@@ -27,7 +27,6 @@ class Hiersup:
         self.weights = None
         # self.weights_dict = None
         self.superpixels = None
-        self.neighbors = None
         self.max_label = None
 
         self.nb_pop = 0
@@ -85,11 +84,11 @@ class Hiersup:
             lb1, lb2 = labels[-1, idx2], labels[-1, idx2 + 1]
             dist = distance(sp1, sp2)
             weights.append(WeightItem((dist, (lb1, lb2))))
-            
+
             # wi = WeightItem((dist, (lb1, lb2)))
             # weights.add(wi)
             # weights_dict[(lb1, lb2)] = wi
-            
+
             max_label = max([max_label, lb1, lb2])
 
         for idx1 in range(W - 1):
@@ -97,11 +96,11 @@ class Hiersup:
             lb1, lb2 = labels[idx1, -1], labels[idx1 + 1, -1]
             dist = distance(sp1, sp2)
             weights.append(WeightItem((dist, (lb1, lb2))))
-            
+
             # wi = WeightItem((dist, (lb1, lb2)))
             # weights.add(wi)
             # weights_dict[(lb1, lb2)] = wi
-            
+
             max_label = max([max_label, lb1, lb2])
 
         # sp1, sp2 = img[-1, -2], img[-1, -1]
@@ -116,66 +115,25 @@ class Hiersup:
 
         return weights, weights_dict, max_label
 
-    @staticmethod
-    def compute_neighbors(superpixels) -> Dict:
-        neighbors = {}
-        labels = superpixels.array_label
-        W, L = labels.shape
-
-        for idx1 in range(1, W - 1):
-            for idx2 in range(1, L - 1):
-                neighbors[labels[idx1, idx2]] = set(
-                    [labels[idx1 + i, idx2] for i in [-1, 1]] +
-                    [labels[idx1, idx2 + i] for i in [-1, 1]]
-                )
-
-        for idx1 in range(1, W - 1):
-            neighbors[labels[idx1, 0]] = set(
-                [labels[idx1 - 1, 0], labels[idx1 + 1, 0], labels[idx1, 1]]
-            )
-            neighbors[labels[idx1, -1]] = set(
-                [labels[idx1 - 1, -1], labels[idx1 + 1, -1], labels[idx1, -2]]
-            )
-
-        for idx2 in range(1, L - 1):
-            neighbors[labels[0, idx2]] = set(
-                [labels[0, idx2 - 1], labels[0, idx2 + 1], labels[1, idx2]]
-            )
-            neighbors[labels[-1, idx2]] = set(
-                [labels[-1, idx2 - 1], labels[-1, idx2 + 1], labels[-2, idx2]]
-            )
-
-        neighbors[labels[0, 0]] = set([labels[0, 1], labels[1, 0]])
-        neighbors[labels[0, -1]] = set([labels[0, -2], labels[1, -1]])
-        neighbors[labels[-1, 0]] = set([labels[-2, 0], labels[-1, 1]])
-        neighbors[labels[-1, -1]] = set([labels[-1, -2], labels[-2, -1]])
-
-        return neighbors
-
     def update_weights(self, new_label: int, ):
-        # labels = set(
-        #     [(new_label, lb2) for lb2 in self.neighbors[new_label]]
-        # )
-
-        for lb2 in self.neighbors[new_label]:
-            t0 = time()
+        for lb2 in self.superpixels.get_neighbors_of(new_label):
+            # t0 = time()
             value = self.distance(
                 self.superpixels[new_label].value,
                 self.superpixels[lb2].value
             )
 
-            t1 = time()
+            # t1 = time()
             heapq.heappush(self.weights, WeightItem((value, (new_label, lb2))))
             # wi = WeightItem((value, (new_label, lb2)))
             # self.weights.add(wi)
             # self.weights_dict[(new_label, lb2)] = wi
-            t3 = time()
+            # t3 = time()
 
             # print("UPDATE: Computing distance:", t1 - t0)
             # print("UPDATE: Getting index:", t2 - t1)
             # print("UPDATE: Inserting value:", t3 - t2)
 
-# 65279, 65535
     def delete_weights(self, lb: int):
         for lb2 in self.neighbors[lb]:
             key = (lb, lb2) if (lb, lb2) in self.weights_dict.keys() else (lb2, lb)
@@ -193,7 +151,6 @@ class Hiersup:
 
     def init_graph(self):
         self.weights, self.weights_dict, self.max_label = self.compute_weights(self.superpixels, self.distance)
-        self.neighbors = self.compute_neighbors(self.superpixels)
 
     def fit(
         self,
@@ -203,6 +160,7 @@ class Hiersup:
         verbose: bool = False,
     ):
         self.superpixels = SuperpixelImage(img, superpixels=None, mask=None)  # TODO: add initialisation with some superpixels.
+        self.superpixels.compute_neighbors()
         self.init_graph()
 
         keep = True
@@ -248,26 +206,18 @@ class Hiersup:
 
         self.max_label += 1
         t1 = time()
-        self.superpixels.merge(label1, label2, label_out=self.max_label)
-        self.neighbors[self.max_label] = (
-            self.neighbors[label1]
-            .union(self.neighbors[label2])
-            .difference([label1, label2])
-        )
+        self.superpixels.merge(label1, label2, label_out=self.max_label, track_neighbors=True)
+
+
         # self.delete_weights(label1)
         # self.delete_weights(label2)
         t2 = time()
-        for lb in [label1, label2]:
-            for nei in self.neighbors[lb].difference([label1, label2]):
-                self.neighbors[nei] = self.neighbors[nei].union([self.max_label]).difference([lb])
 
-        del self.neighbors[label1]
-        del self.neighbors[label2]
 
         self.update_weights(self.max_label)
         t3 = time()
 
-        nb_neighbors = len(self.neighbors[self.max_label])
+        nb_neighbors = len(self.superpixels.get_neighbors_of(self.max_label))
         self.nb_neighbors.append(nb_neighbors)
         self.time_update.append(t3-t2)
         self.time_merge.append(t2-t1)

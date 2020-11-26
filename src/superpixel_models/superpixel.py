@@ -43,6 +43,7 @@ class Superpixel:
         self.pixel_idxs = pixel_idxs
         self.values = values
         self.value = np.mean(self.values)
+        self.pos = np.mean(np.array(pixel_idxs)).mean(0)
         self.items = set(zip(pixel_idxs, values))
 
     # def value(self):
@@ -78,6 +79,7 @@ class SuperpixelImage:
         img: np.ndarray,
         superpixels: Optional[Dict[Superpixel]] = None,
         mask: Optional[np.ndarray] = None,
+        track_neighbors: Optional[bool] = True,
     ):
         self.img_ini = img + 0
         self.superpixels_state = 0
@@ -94,6 +96,9 @@ class SuperpixelImage:
         self._array_label = None
         self._array_means = None
         self._neighbors = None
+
+        if track_neighbors:
+            self.compute_neighbors()
 
     def __getitem__(self, idx):
         return self.superpixels[idx]
@@ -261,7 +266,7 @@ class SuperpixelImage:
 
 
     def array_some_sp(self, labels: List[int]):
-        array_label = self.array_label
+        array_label = self.array_label + 0
         array_label[~np.isin(array_label, labels)] = -1
         return array_label
 
@@ -274,3 +279,37 @@ class SuperpixelImage:
         if name == "superpixels":
             self.superpixels_state += 1
         return super().__setattr__(name, value)
+
+
+    def absorb_small(self, size: int, track_neighbors=True, mode='random'):
+        changed = {}
+        for label, sp in list(self.superpixels.items()):
+            if len(sp) <= size:
+                neis = self.get_neighbors_of(label)
+
+                if mode == 'random':
+                    lb1 = neis.pop()
+
+                elif mode == 'min_pos':
+                    min_pos = np.infty
+                    min_nei = 0
+                    for nei in neis:
+                        cur_dist = (self.superpixels[nei].pos - sp.pos) ** 2
+                        if cur_dist < min_pos:
+                            min_pos = cur_dist
+                            min_nei = nei
+                    lb1 = min_nei
+
+                elif mode == 'min_value':
+                    min_value = np.infty
+                    min_nei = 0
+                    for nei in neis:
+                        cur_dist = (self.superpixels[nei].value - sp.value) ** 2
+                        if cur_dist < min_value:
+                            min_value = cur_dist
+                            min_nei = nei
+                    lb1 = min_nei
+
+                self.merge(lb1, label, lb1, track_neighbors=track_neighbors)
+                changed[label] = lb1
+        return changed

@@ -42,7 +42,7 @@ class Hiersup:
         self.nb_weights_pop = []
 
     @staticmethod
-    def compute_weights(superpixels: SuperpixelImage, distance) -> List[Tuple[Tuple[int], float]]:
+    def compute_weights_from_img(superpixels: SuperpixelImage, distance) -> List[Tuple[Tuple[int], float]]:
         img = superpixels.array_means
         labels = superpixels.array_label
         W, L = img.shape
@@ -115,6 +115,34 @@ class Hiersup:
 
         return weights, weights_dict, max_label
 
+    @staticmethod
+    def compute_weights(superpixels: SuperpixelImage, distance) -> List[Tuple[Tuple[int], float]]:
+        weights = []
+        weights_dict = {}
+        done = set()
+
+        max_label = 0
+
+        for lb in superpixels.superpixels.keys():
+            sp1 = superpixels[lb].value
+
+            for lb2 in superpixels.get_neighbors_of(lb):
+                key = tuple(sorted((lb, lb2)))
+                if key in done:
+                    continue
+
+                sp2 = superpixels[lb2].value
+                dist = distance(sp1, sp2)
+                weights.append(WeightItem((dist, key)))
+                done.add(key)
+
+                max_label = max(max_label, lb, lb2)
+
+        heapq.heapify(weights)
+
+        return weights, weights_dict, max_label
+
+
     def update_weights(self, new_label: int, ):
         for lb2 in self.superpixels.get_neighbors_of(new_label):
             # t0 = time()
@@ -141,25 +169,29 @@ class Hiersup:
             self.neighbors[lb2].remove(lb)
             del(self.weights_dict[key])
 
-
-    def merge_verteces(self):
-        pass
-
     @staticmethod
     def distance(c1: float, c2: float) -> float:
         return (c1 - c2) ** 2
 
     def init_graph(self):
+        t1 = time()
+        # self.weights, self.weights_dict, self.max_label = self.compute_weights_from_img(self.superpixels, self.distance)
         self.weights, self.weights_dict, self.max_label = self.compute_weights(self.superpixels, self.distance)
+        t2 = time()
+        print('Computing weights', t2 - t1)
 
     def fit(
         self,
         img: np.ndarray,
+        superpixel_image: Optional[SuperpixelImage] = None,
         superpixels: Optional[List] = None,
         mask: Optional[np.ndarray] = None,
         verbose: bool = False,
     ):
-        self.superpixels = SuperpixelImage(img, superpixels=None, mask=None)  # TODO: add initialisation with some superpixels.
+        if superpixel_image is not None:
+            self.superpixels = superpixel_image
+        else:
+            self.superpixels = SuperpixelImage(img, superpixels=superpixels, mask=mask,)
         self.superpixels.compute_neighbors()
         self.init_graph()
 
@@ -207,7 +239,6 @@ class Hiersup:
         self.max_label += 1
         t1 = time()
         self.superpixels.merge(label1, label2, label_out=self.max_label, track_neighbors=True)
-
 
         # self.delete_weights(label1)
         # self.delete_weights(label2)

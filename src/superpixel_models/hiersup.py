@@ -144,7 +144,8 @@ class Hiersup:
 
 
     def update_weights(self, new_label: int, ):
-        for lb2 in self.superpixels.get_neighbors_of(new_label):
+        neighbors = self.superpixels.get_neighbors_of(new_label)
+        for lb2 in neighbors:
             # t0 = time()
             value = self.distance(
                 self.superpixels[new_label].value,
@@ -203,7 +204,7 @@ class Hiersup:
         while keep:
             print("Step time:", t2 - t1, '\n',
             "Total loop time:", tot, '\n')
-
+#it == 29
             t1 = time()
             self.step()
 

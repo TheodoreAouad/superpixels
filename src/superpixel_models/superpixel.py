@@ -4,28 +4,32 @@ from typing import List, Optional, Dict, Set
 
 import numpy as np
 
+from src.jit_utils import numba_mean
 from src.superpixel_models.utils import compute_edges
 
 
-def record_superpixels_state(attribute):
+def record_state(value_att, state_att):
     """ Decorator that records superpixels state. Recompute the function
     if and only if superpixels did change.
     """
 
     def decorator_record(fn):
-        # fn_name = fn.__name__
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            if args[0].superpixels_state != wrapper.superpixels_state:
-                wrapper.superpixels_state = args[0].superpixels_state
+            class_state = getattr(args[0], state_att)
+
+            if class_state != getattr(wrapper, state_att):
+                # wrapper.superpixels_state = args[0].superpixels_state
+                setattr(wrapper, state_att, class_state)
                 res = fn(*args, **kwargs)
-                setattr(args[0], attribute, res)
+                setattr(args[0], value_att, res)
                 return res
             else:
-                return getattr(args[0], attribute)
+                return getattr(args[0], value_att)
 
-        wrapper.superpixels_state = 0
+        setattr(wrapper, state_att, -1)
+
 
         return wrapper
     return decorator_record
@@ -36,18 +40,45 @@ class Superpixel:
     def __init__(
         self,
         label: Optional[int] = None,
-        pixel_idxs: Optional[List] = None,
-        values: Optional[List] = None,
+        pixel_idxs: Optional[np.ndarray] = None,
+        values: Optional[np.ndarray] = None,
     ):
+        self._to_reset_on_change = [
+            "_value",
+            "_pos",
+            "_test",
+        ]
+
         self.label = label
         self.pixel_idxs = pixel_idxs
         self.values = values
-        self.value = np.mean(self.values)
-        self.pos = np.mean(np.array(pixel_idxs)).mean(0)
-        self.items = set(zip(pixel_idxs, values))
 
-    # def value(self):
-    #     return np.mean(self.values)
+        self.this_state = 0
+        self.superpixels_state = 0
+
+        self._value = None
+        self._pos = None
+        self._test = None
+
+
+    @property
+    # @record_state(value_att="_value", state_att="this_state")
+    def value(self):
+        if self._value is not None:
+            return self._value
+
+        self._value = numba_mean(self.values)
+        return self._value
+
+    @property
+    # @record_state(value_att="_pos", state_att="this_state")
+    def pos(self):
+        if self._pos is not None:
+            return self._pos
+
+        self._pos = np.mean(self.pixel_idxs, 0)
+        # return np.mean(self.pixel_idxs, 0)
+        return self._pos
 
     def __getitem__(self, idx):
         return self.pixel_idxs[idx], self.values[idx]
@@ -58,8 +89,10 @@ class Superpixel:
     def merge(self, sp: Superpixel, label: Optional[int] = None) -> Superpixel:
         return Superpixel(
             label=self.label if label is None else label,
-            pixel_idxs=self.pixel_idxs + sp.pixel_idxs,
-            values=self.values + sp.values,
+            # pixel_idxs=self.pixel_idxs + sp.pixel_idxs,
+            pixel_idxs=np.concatenate((self.pixel_idxs, sp.pixel_idxs)),
+            # values=self.values + sp.values,
+            values=np.concatenate((self.values, sp.values)),
         )
 
     def __repr__(self):
@@ -71,6 +104,11 @@ class Superpixel:
             "]"
         )
 
+    def reset_attributes(self):
+        for attr in self._to_reset_on_change:
+            setattr(self, attr, None)
+        return self
+
 
 class SuperpixelImage:
 
@@ -81,6 +119,10 @@ class SuperpixelImage:
         mask: Optional[np.ndarray] = None,
         track_neighbors: Optional[bool] = True,
     ):
+        self._to_reset_on_change = [
+            "_array_label", "_array_means", "_edges"
+        ]
+
         self.img_ini = img + 0
         self.superpixels_state = 0
 
@@ -96,6 +138,7 @@ class SuperpixelImage:
         self._array_label = None
         self._array_means = None
         self._neighbors = None
+        self._edges = None
 
         if track_neighbors:
             self.compute_neighbors()
@@ -107,25 +150,35 @@ class SuperpixelImage:
         return len(self.superpixels)
 
     @property
-    @record_superpixels_state("_array_label")
+    # @record_state(value_att="_array_label", state_att='superpixels_state')
     def array_label(self) -> np.ndarray:
+        if self._array_label is not None:
+            return self._array_label
+
         img = np.zeros(self.img_ini.shape).astype(int)
 
         for sp in self.superpixels.values():
             for (idx1, idx2), _ in sp:
                 img[idx1, idx2] = sp.label
-        return img
+        self._array_label = img
+        return self._array_label
+        # return img
 
     @property
-    @record_superpixels_state("_array_means")
+    @record_state(value_att="_array_means", state_att='superpixels_state')
     def array_means(self) -> np.ndarray:
+        if self._array_means is not None:
+            return self._array_means
+
         img = np.zeros(self.img_ini.shape)
 
         for sp in self.superpixels.values():
             value = sp.value
             for (idx1, idx2), pixel_id in sp:
                 img[idx1, idx2] = value
-        return img
+        # return img
+        self._array_means = img
+        return self._array_means
 
     @staticmethod
     def init_sp_from_img(img: np.ndarray) -> List[Superpixel]:
@@ -137,8 +190,8 @@ class SuperpixelImage:
             for j in range(L):
                 superpixels[idx] = Superpixel(
                     label=idx,
-                    pixel_idxs=[(i, j)],
-                    values=[img[i, j]],
+                    pixel_idxs=np.array([[i, j]]),
+                    values=np.array([img[i, j]]),
                 )
                 idx += 1
 
@@ -160,9 +213,13 @@ class SuperpixelImage:
 
         return superpixels
 
-    @record_superpixels_state("_edges")
+    # @record_state(value_att="_edges", state_att='superpixels_state')
     def infer_superpixel_edges(self) -> np.ndarray:
-        return compute_edges(self.array_label)
+        if self._edges is not None:
+            return self._edges
+        self._edges = compute_edges(self.array_label)
+        # return compute_edges(self.array_label)
+        return self._edges
 
     def __repr__(self):
         return super().__repr__().replace('>', f' ({len(self)} superpixels)>')
@@ -200,10 +257,11 @@ class SuperpixelImage:
             for lb in to_go:
                 self.remove_from_neighbors(lb)
 
-
-
-    @record_superpixels_state("_neighbors")
+    # @record_state(value_att="_neighbors", state_att='superpixels_state')
     def compute_neighbors(self):
+        # if self._neighbors is not None:
+        #     return self._neighbors
+
         edges = self.infer_superpixel_edges()
         labels = self.array_label
         _neighbors = {}
@@ -211,8 +269,10 @@ class SuperpixelImage:
         xs, ys = np.where(edges)
         for (x, y) in zip(xs, ys):
             lb1 = labels[x, y]
-            lb2 = labels[max(0, x - 1), y]
-            lb3 = labels[x, max(0, y - 1)]
+            # lb2 = labels[max(0, x - 1), y]
+            lb2 = labels[(x - 1) if (x - 1) > 0 else 0, y]
+            # lb3 = labels[x, max(0, y - 1)]
+            lb3 = labels[x, (y - 1) if (y - 1) > 0 else 0]
 
             if lb1 != lb2:
                 _neighbors.setdefault(lb1, set()).add(lb2)
@@ -221,7 +281,9 @@ class SuperpixelImage:
                 _neighbors.setdefault(lb1, set()).add(lb3)
                 _neighbors.setdefault(lb3, set()).add(lb1)
 
-        return _neighbors
+        # return _neighbors
+        self._neighbors = _neighbors
+        return self._neighbors
 
 
     def get_neighbors_of(self, label: int) -> List[int]:
@@ -271,13 +333,20 @@ class SuperpixelImage:
         return array_label
 
 
+    def reset_attributes(self):
+        for attr in self._to_reset_on_change:
+            setattr(self, attr, None)
+        return self
+
     def set_superpixel(self, label: int, new_sp: Superpixel) -> None:
         self.superpixels[label] = new_sp
-        self.superpixels_state += 1
+        # self.superpixels_state += 1
+        self.reset_attributes()
 
     def __setattr__(self, name, value):
         if name == "superpixels":
-            self.superpixels_state += 1
+            # self.superpixels_state += 1
+            self.reset_attributes()
         return super().__setattr__(name, value)
 
 

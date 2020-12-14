@@ -164,3 +164,13 @@ for sp in self.superpixels.superpixels:
 
 plt.imsave(f'./results/hiersup/try_13/{len(self.superpixels)}/some_sp.png', self.superpixels.array_some_sp([3770]))
 # plt.imsave(f'./results/hiersup/try_13/{len(self.superpixels)}/labels.png', self.superpixels.array_label)
+
+
+
+from time import time
+import numpy as np
+t1 = time()
+for _ in range(10**6):
+    m = max(0, 1)
+    # m = (0, 1) if 0 < 1 else (0, 1)
+print(time() - t1)
